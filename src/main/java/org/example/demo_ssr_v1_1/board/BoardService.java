@@ -84,7 +84,12 @@ public class BoardService {
         // Pageable 생성 (페이지 번호, 페이지 크기, 정렬 기준)
         // page는 0부터 시작하므로 사용자가 1을 입력하면 0으로 변환
         // size는 기본값 5, 최소 1, 최대 50으로 제한
+        // 페이지 번호가 음수가 되는 것을 막습니다.
+        // Math.max(A, B)는 A와 B 중 더 큰 숫자를 선택합니다.
         int validPage = Math.max(0, page);
+
+        // 최대값 제한 (Math.min) - "상한선" (누군가 1만가 달라고 조작한다면 악의적으로 부담이 될 수 있다)
+        // 최소값 제한 (Math.max) - "하한선" (사용자가 0개나 -10개 달라고 요청함)
         int validSize = Math.max(1, Math.min(50, size));
         
         // 정렬 기준: 생성일 기준 내림차순 (최신순)
