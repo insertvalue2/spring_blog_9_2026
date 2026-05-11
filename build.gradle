@@ -10,11 +10,11 @@ description = 'demo_ssr_v1_1'
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        languageVersion = JavaLanguageVersion.of(21)
     }
     // 소스 파일 인코딩 설정 (한글 깨짐 방지)
-    sourceCompatibility = '17'
-    targetCompatibility = '17'
+    sourceCompatibility = '21'
+    targetCompatibility = '21'
 }
 
 // 컴파일 시 인코딩 설정

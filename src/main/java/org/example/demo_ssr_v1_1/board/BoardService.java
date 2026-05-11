@@ -60,48 +60,70 @@ public class BoardService {
 
     /**
      * 게시글 목록 조회 (페이징)
-     * 
-     * OSIV False 환경 대응:
-     * - 트랜잭션 내에서 필요한 데이터를 모두 조회하고 DTO로 변환
-     * - JOIN FETCH로 Board와 User를 한 번의 쿼리로 함께 조회
-     * - 엔티티를 DTO로 변환하여 반환 (LAZY 로딩 문제 방지)
-     * 
-     * 트랜잭션:
-     * - 읽기 전용 트랜잭션 (readOnly = true)
-     * - 성능 최적화: 변경 작업이 없으므로 읽기 전용으로 설정
-     * 
-     * 페이징 처리:
-     * - Spring Data JPA의 Pageable을 사용하여 페이징 처리
-     * - 기본값: page=0 (첫 페이지), size=5 (페이지당 5개)
-     * - 정렬: 생성일 기준 내림차순 (최신순)
-     * 
-     * @param page 페이지 번호 (0부터 시작, 기본값: 0)
-     * @param size 페이지 크기 (기본값: 5)
-     * @return 페이징된 게시글 목록 DTO
+     *
+     * 페이지 번호 규칙:
+     * - 호출자(Controller)는 항상 1-base 페이지 번호를 넘긴다. (1, 2, 3 ...)
+     * - Spring Data JPA의 PageRequest는 0-base이므로 이 메서드 안에서 -1 변환.
+     * - 0-base 변환은 이 한 곳에서만 일어나므로, 0/1 base 혼동이 코드 전체로 퍼지지 않는다.
+     *
+     * 방어 로직:
+     * - page < 1 이면 1로 보정 (음수, 0 방어)
+     * - size 는 1 ~ 50 으로 제한 (size=10000 같은 악성/오타 요청 방어)
+     *
+     * @param page 페이지 번호 (1-base)
+     * @param size 페이지 크기
+     * @return 페이징 정보 + 게시글 목록 DTO
      */
     @Transactional(readOnly = true)
     public BoardResponse.PageDTO 게시글목록조회(int page, int size) {
-        // Pageable 생성 (페이지 번호, 페이지 크기, 정렬 기준)
-        // page는 0부터 시작하므로 사용자가 1을 입력하면 0으로 변환
-        // size는 기본값 5, 최소 1, 최대 50으로 제한
-        // 페이지 번호가 음수가 되는 것을 막습니다.
-        // Math.max(A, B)는 A와 B 중 더 큰 숫자를 선택합니다.
-        int validPage = Math.max(0, page);
+        // 화면 기준으로 넘어오는 값 (사용자에게 보이는 기준): 0이 아니라 1부터 시작.
+        // 반면 Spring Data의 PageRequest는 0부터 시작 — 내부적으로 OFFSET = pageIndex * size 로
+        // SQL을 만드는데, DB의 OFFSET 자체가 0부터이기 때문이다.
+        // 그래서 여기서 -1 해서 0-base로 맞춰준다.
+        // Math.max(0, ...)는 사용자가 스크립트로 page=-5 같은 음수를 보내도
+        // 음수 인덱스로 안 떨어지게 막는 방어 코드(마이너스 입력 방어).
+        int pageIndex = Math.max(0, page - 1);
 
-        // 최대값 제한 (Math.min) - "상한선" (누군가 1만가 달라고 조작한다면 악의적으로 부담이 될 수 있다)
-        // 최소값 제한 (Math.max) - "하한선" (사용자가 0개나 -10개 달라고 요청함)
+        // size 안전 범위 보정. "기본값 5"는 이 줄이 아니라
+        // Controller의 @RequestParam(defaultValue = "5") 가 정해 준다.
+        // 이 줄은 단지 "1보다 작거나 50보다 큰 값이 들어와도 안전 범위로 잘라낸다" 가 전부.
+        // 예) ?size=0     → 1 로 보정
+        //     ?size=10000 → 50 으로 보정
         int validSize = Math.max(1, Math.min(50, size));
-        
-        // 정렬 기준: 생성일 기준 내림차순 (최신순)
+
+        // 정렬: 생성일 내림차순 (최신순)
         Sort sort = Sort.by(Sort.Direction.DESC, "createdAt");
-        Pageable pageable = PageRequest.of(validPage, validSize, sort);
-        
-        // JOIN FETCH로 Board와 User를 한 번의 쿼리로 함께 조회 (페이징 적용)
-        // N+1 문제 해결 및 OSIV False 환경 대응
+
+        // [Pageable 이란?]
+        // "어떤 페이지를(pageIndex), 몇 개씩(validSize), 어떤 정렬로(sort) 가져올지"
+        // 를 한 묶음으로 표현한 Spring Data 의 표준 페이징 요청 인터페이스.
+        // Repository 메서드에 인자로 넘기면 Spring Data 가 LIMIT + OFFSET SQL 을 자동 생성해 준다.
+        // → 우리가 페이징 SQL 을 손으로 쓸 일이 없어진다.
+        Pageable pageable = PageRequest.of(pageIndex, validSize, sort);
+
+        // [Page<T> 란?]
+        // "조회된 데이터 한 페이지" 와 "페이징 메타데이터" 를 한꺼번에 담아주는 결과 컨테이너.
+        //   - getContent()        : 현재 페이지의 데이터 목록
+        //   - getNumber()         : 현재 페이지 번호 (0-base)
+        //   - getTotalElements()  : 전체 항목 수
+        //   - getTotalPages()     : 전체 페이지 수
+        //   - isFirst() / isLast(): 첫/마지막 페이지 여부
+        // Spring Data 가 LIMIT 쿼리 + count(*) 쿼리를 함께 실행해서 위 값들을 한 번에 채워준다.
+        // 즉, 우리가 따로 count 쿼리를 날리거나 Math.ceil 로 전체 페이지 수를 계산할 필요가 없다.
+        //
+        // 또한 이 메서드는 JOIN FETCH 로 Board + User 를 한 번에 조회한다.
+        // (N+1 방지 + OSIV false 환경 대응)
         Page<Board> boardPage = boardRepository.findAllWithUserOrderByCreatedAtDesc(pageable);
-        
-        // 트랜잭션 내에서 Page 객체를 PageDTO로 변환
-        // PageDTO 생성자에서 엔티티를 DTO로 변환
+
+        // [왜 Page<Board> 를 그대로 안 쓰고 PageDTO 로 한 번 더 감싸나?]
+        // Page<Board> 를 모델에 그대로 담아 화면에 넘겨도 동작 자체는 한다.
+        // 그런데도 한 겹 감싸는 이유:
+        //  1) Board 는 DB 용 엔티티. 화면 모델과 분리해야 password 같은 민감 필드가 새지 않는다.
+        //  2) createdAt(Timestamp) 을 보기 좋은 문자열로 포맷팅하는 일이 ListDTO 안에 있다.
+        //  3) Mustache 는 산술/비교 연산을 못 해서 prevPage, nextPage, active 같은 값을
+        //     자바 쪽에서 미리 계산해 줘야 한다 — 그 계산 결과를 담을 그릇이 PageDTO 다.
+        //  4) OSIV 가 false 라 트랜잭션이 끝나면 LAZY 필드 접근이 막힌다. DTO 패턴이면
+        //     화면이 엔티티를 직접 만지지 않으니 미래에 LAZY 필드가 늘어나도 사고가 적다.
         return new BoardResponse.PageDTO(boardPage);
     }
 

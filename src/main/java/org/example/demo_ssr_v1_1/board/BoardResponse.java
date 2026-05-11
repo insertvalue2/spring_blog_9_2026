@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * 게시글 응답 DTO
- * 
+ *
  * Open Session in View가 false일 때:
  * - 트랜잭션이 끝나면 세션이 종료되어 LAZY 로딩 불가
  * - Service에서 필요한 데이터를 모두 조회하고 DTO로 변환하여 반환
@@ -91,98 +91,79 @@ public class BoardResponse {
     }
 
     /**
-     * 페이징 정보 DTO
-     * 
-     * Spring Data JPA의 Page 객체를 View에 전달하기 위한 DTO
-     * 페이징 정보와 페이지 링크 정보를 포함합니다.
+     * 페이징 정보 DTO (단순화 버전)
+     *
+     * 설계 원칙:
+     * 1. 뷰(템플릿)는 항상 1부터 시작하는 페이지 번호를 본다
+     *    - Spring Data JPA의 Page.getNumber()는 0부터 시작하므로
+     *      DTO 생성 시점에 +1 해서 1-base로 정규화한다.
+     *
+     * 2. 템플릿(Mustache)은 산술/비교 연산을 못한다
+     *    - 이전/다음 페이지 번호와 표시할 페이지 번호 목록은
+     *      DTO에서 미리 계산해 넘긴다.
+     *    - "현재 페이지인가?"라는 비교도 Mustache가 못 하므로,
+     *      페이지 번호 하나하나를 PageItem(number, active)으로 감싼다.
      */
     @Data
     public static class PageDTO {
-        private List<ListDTO> content;  // 현재 페이지의 게시글 목록
-        private int number;              // 현재 페이지 번호 (0부터 시작)
-        private int size;                // 페이지 크기
-        private int totalPages;          // 전체 페이지 수
-        private long totalElements;      // 전체 게시글 수
-        private boolean first;           // 첫 페이지 여부
-        private boolean last;            // 마지막 페이지 여부
-        private boolean hasNext;         // 다음 페이지 존재 여부
-        private boolean hasPrevious;     // 이전 페이지 존재 여부
-        private Integer previousPageNumber;  // 이전 페이지 번호 (없으면 null)
-        private Integer nextPageNumber;      // 다음 페이지 번호 (없으면 null)
-        private List<PageLink> pageLinks;    // 페이지 번호 링크 목록
+        private List<ListDTO> list;
+        private int currentPage;
+        private int size;
+        private int totalPages;
+        private long totalElements;
+        private boolean first;
+        private boolean last;
+        private int prevPage;
+        private int nextPage;
+        private List<PageItem> pageNumbers;
 
-        /**
-         * PageDTO 생성자
-         * 
-         * @param page Spring Data JPA의 Page<Board> 객체
-         */
         public PageDTO(Page<Board> page) {
-            // 게시글 목록을 DTO로 변환
-            this.content = page.getContent().stream()
-                    .map(ListDTO::new)
+            // 엔티티 → DTO 변환
+            this.list = page.getContent().stream()
+                    .map(board -> new ListDTO(board))
                     .toList();
-            
-            // 페이징 정보 설정
-            this.number = page.getNumber();           // 현재 페이지 번호 (0부터 시작)
-            this.size = page.getSize();               // 페이지 크기
-            this.totalPages = page.getTotalPages();   // 전체 페이지 수
-            this.totalElements = page.getTotalElements(); // 전체 게시글 수
-            this.first = page.isFirst();              // 첫 페이지 여부
-            this.last = page.isLast();                // 마지막 페이지 여부
-            this.hasNext = page.hasNext();            // 다음 페이지 존재 여부
-            this.hasPrevious = page.hasPrevious();    // 이전 페이지 존재 여부
-            
-            // 이전/다음 페이지 번호 설정 (1부터 시작하는 번호로 변환)
-            // page.getNumber()는 0부터 시작하므로 1부터 시작하는 번호로 변환
-            // 예: page.getNumber() = 0 (첫 페이지) -> previousPageNumber = null
-            //     page.getNumber() = 1 (두 번째 페이지) -> previousPageNumber = 1 (1페이지로 이동)
-            this.previousPageNumber = page.hasPrevious() ? page.getNumber() : null;
-            // 예: page.getNumber() = 0 (첫 페이지) -> nextPageNumber = 2 (2페이지로 이동)
-            //     page.getNumber() = 1 (두 번째 페이지) -> nextPageNumber = 3 (3페이지로 이동)
-            this.nextPageNumber = page.hasNext() ? page.getNumber() + 2 : null;
-            
-            // 페이지 링크 생성 (현재 페이지 기준 앞뒤 2페이지씩 표시)
-            this.pageLinks = generatePageLinks(page);
-        }
 
-        /**
-         * 페이지 링크 생성
-         * 
-         * 현재 페이지를 기준으로 앞뒤 2페이지씩 표시합니다.
-         * 예: 현재 페이지가 5이면 [3, 4, 5, 6, 7] 표시
-         * 
-         * @param page Spring Data JPA의 Page 객체
-         * @return 페이지 링크 목록
-         */
-        private List<PageLink> generatePageLinks(Page<Board> page) {
-            List<PageLink> links = new ArrayList<>();
-            
-            int currentPage = page.getNumber() + 1;  // 0부터 시작하는 번호를 1부터 시작하는 번호로 변환
-            int totalPages = page.getTotalPages();
-            
-            // 시작 페이지와 끝 페이지 계산
-            int startPage = Math.max(1, currentPage - 2);
-            int endPage = Math.min(totalPages, currentPage + 2);
-            
-            // 페이지 링크 생성
-            for (int i = startPage; i <= endPage; i++) {
-                PageLink link = new PageLink();
-                link.setDisplayNumber(i);
-                link.setActive(i == currentPage);
-                links.add(link);
+            // 0-base → 1-base 정규화
+            this.currentPage = page.getNumber() + 1;
+            this.size = page.getSize();
+            this.totalPages = page.getTotalPages();
+            this.totalElements = page.getTotalElements();
+            this.first = page.isFirst();
+            this.last = page.isLast();
+
+            // 이전/다음 페이지 번호 (템플릿이 산술을 못 하므로 미리 계산)
+            // 경계에서는 자기 자신을 넣고, 화면에서는 first/last 플래그로 disabled 처리.
+            this.prevPage = this.first ? this.currentPage : this.currentPage - 1;
+            this.nextPage = this.last ? this.currentPage : this.currentPage + 1;
+
+            // 페이지 번호 윈도우: 현재 페이지 기준 앞뒤 2페이지 (최대 5개)
+            // 예) 전체 10페이지, 현재 5 → [3, 4, 5, 6, 7]
+            // 각 번호에 "현재 페이지인가?" 정보를 함께 담아 PageItem으로 만든다.
+            int start = Math.max(1, this.currentPage - 2);
+            int end = Math.min(this.totalPages, this.currentPage + 2);
+
+            // 빈 리스트를 먼저 만들고, for문으로 하나씩 채워 넣는다.
+            // 게시글이 0개라 totalPages가 0이면 end가 0이 되어 (start=1, end=0)
+            // 반복문이 한 번도 안 돌고 빈 리스트 그대로 남는다.
+            this.pageNumbers = new ArrayList<>();
+            for (int i = start; i <= end; i++) {
+                boolean isActive = (i == this.currentPage); // 이 번호가 현재 페이지면 true
+                this.pageNumbers.add(new PageItem(i, isActive));
             }
-            
-            return links;
         }
     }
 
     /**
-     * 페이지 링크 정보 DTO
+     * 페이지 번호 한 칸을 표현하는 DTO.
+     *
+     * Mustache는 "현재 페이지인가?" 같은 비교 연산을 못 한다.
+     * 그래서 자바에서 각 페이지 번호마다 active 플래그를 미리 계산해 담아준다.
+     * - number : 화면에 표시할 페이지 번호 (1-base)
+     * - active : 현재 페이지면 true (Bootstrap "active" 클래스 부여용)
      */
     @Data
-    public static class PageLink {
-        private int displayNumber;  // 표시할 페이지 번호 (1부터 시작)
-        private boolean active;     // 현재 페이지 여부
+    public static class PageItem {
+        private final int number;
+        private final boolean active;
     }
 }
-

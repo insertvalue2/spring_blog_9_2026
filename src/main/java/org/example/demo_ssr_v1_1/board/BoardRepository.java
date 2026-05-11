@@ -105,23 +105,37 @@ public interface BoardRepository extends JpaRepository<Board, Long> {
     
     /**
      * 게시글 페이징 조회 (작성자 정보 포함, JOIN FETCH 사용)
-     * 
-     * JOIN FETCH와 페이징을 함께 사용할 때 주의사항:
-     * - JOIN FETCH를 사용하면 count 쿼리가 정확하지 않을 수 있음
-     * - 하지만 DISTINCT를 사용하면 정확한 count를 얻을 수 있음
-     * - Spring Data JPA가 자동으로 count 쿼리를 생성
-     * 
+     *
+     * [@Query 의 value 와 countQuery — 왜 쿼리가 두 개인가?]
+     * 페이징을 하려면 사실 SQL 두 번이 필요하다.
+     *   1) value     : 현재 페이지의 실제 데이터를 가져오는 메인 쿼리 (LIMIT/OFFSET 자동 적용)
+     *   2) countQuery: 전체가 총 몇 건인지 세는 카운트 쿼리
+     *                  → Page<T> 의 totalElements / totalPages 계산에 사용됨
+     *
+     * countQuery 를 적지 않으면 Spring Data 가 메인 쿼리에서 SELECT 절을 떼어내고
+     * COUNT(*) 로 바꿔 자동 생성을 시도한다. 하지만 JOIN FETCH 같은 복잡한 쿼리에서는
+     * 자동 변환이 실패하거나 비효율적이다. 그래서 명시적으로 적어 준다.
+     *
+     * 비유: 책장에서 책을 꺼낼 때, "이번에 보여줄 책 5권을 꺼내는 일" 과 "이 책장에 총
+     * 몇 권이 꽂혀 있는지 세는 일" 은 별개의 작업이다. 두 번째 작업에는 굳이 책 표지를
+     * 펴서 작가 정보까지 볼 필요가 없다. 그래서 countQuery 에는 JOIN FETCH 를 안 넣는다.
+     *
+     * [DISTINCT 가 필요한 이유]
+     * JOIN FETCH 는 결과 행 수를 부풀릴 수 있다(특히 @OneToMany). 안전하게 중복을 제거하기
+     * 위해 메인 쿼리와 카운트 쿼리 모두 DISTINCT 를 쓴다.
+     *
      * 생성되는 SQL:
-     * SELECT DISTINCT b.*, u.* 
-     * FROM board_tb b 
-     * INNER JOIN user_tb u ON b.user_id = u.id 
-     * ORDER BY b.created_at DESC
-     * LIMIT ? OFFSET ?
-     * 
+     *   메인  : SELECT DISTINCT b.*, u.*
+     *           FROM board_tb b
+     *           INNER JOIN user_tb u ON b.user_id = u.id
+     *           ORDER BY b.created_at DESC
+     *           LIMIT ? OFFSET ?
+     *   카운트: SELECT COUNT(DISTINCT b.id) FROM board_tb b
+     *
      * @param pageable 페이징 정보 (페이지 번호, 페이지 크기, 정렬)
      * @return 페이징된 게시글 목록 (작성자 정보 포함)
      */
-    @Query(value = "SELECT DISTINCT b FROM Board b JOIN FETCH b.user ORDER BY b.createdAt DESC",
+    @Query(value      = "SELECT DISTINCT b FROM Board b JOIN FETCH b.user ORDER BY b.createdAt DESC",
            countQuery = "SELECT COUNT(DISTINCT b) FROM Board b")
     Page<Board> findAllWithUserOrderByCreatedAtDesc(Pageable pageable);
     
